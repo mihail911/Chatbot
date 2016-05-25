@@ -9,6 +9,7 @@ import time
 
 from flask import Flask, request, session
 from datetime import datetime
+from models import EchoAgent, RandomAgent
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -20,8 +21,6 @@ FB_MESSAGES_ENDPOINT = "https://graph.facebook.com/v2.6/me/messages"
 # API; for security reasons keep this app in a separate file on your local filesystem
 with open("/var/www/flask-test/fbtoken.txt", "r") as f:
     FB_TOKEN = f.readline()
-
-random_phrases = ["cats are cool", "dogs are cool too", "hamsters are fun", "gerbils are fun too"]
 
 
 class MessengerDB(object):
@@ -43,7 +42,6 @@ class MessengerDB(object):
     def log_response(self, agent, user_id, timestamp, response):
         """ Agent is one of 'user'/'sys' and determines
         which table we will update """
-        #.conn = sqlite3.connect(self.path_to_db)
         with self.conn:
             try:
                 c = self.conn.cursor()
@@ -73,10 +71,13 @@ def hub_tok_response():
 # It should be easy to plug and play new system agent models into here
 @app.route('/', methods=["POST"])
 def chatbot_response():
+    # Intance a system agent type--only line you need to change to get a different system backend
+    agent = RandomAgent()
+
+    # Instantiate a  DB for persistent storage
     global db
     curr_time = str(datetime.now())
 
-    phrase = random.choice(random_phrases)    
     # Process FBs POST request, containing the user's text to the app
     req_data = request.data
     data = json.loads(req_data)
@@ -85,10 +86,11 @@ def chatbot_response():
     sent_message = data["entry"][0]["messaging"][0]["message"]["text"]
 
     db.log_response("user", sender_id, curr_time, sent_message)
-
+    
+    response = agent.respond(sent_message)
     # JSON containing system response
     send_back_to_fb = {
- 	    "recipient": {"id": sender_id}, "message": { "text": phrase}
+ 	    "recipient": {"id": sender_id}, "message": { "text": response}
     }
     print "Send back to fb: ", send_back_to_fb
     params_input = {"access_token": FB_TOKEN}
@@ -98,7 +100,7 @@ def chatbot_response():
     fb_response = requests.post(FB_MESSAGES_ENDPOINT, headers=headers, params=params_input, data=json.dumps(send_back_to_fb)) 
 
     response_time = str(datetime.now())
-    db.log_response("sys", sender_id, response_time, phrase)    
+    db.log_response("sys", sender_id, response_time, response)    
     # Handle FBs response to the subrequest you made
     if not fb_response.ok:
         # Log some useful info for yourself, for debugging

@@ -13,16 +13,19 @@ from datetime import datetime
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
+# This is the FB Graph API endpoint you must send HTTPS requests to
 FB_MESSAGES_ENDPOINT = "https://graph.facebook.com/v2.6/me/messages"
+
+# Every app must have access to a page access token to use for querying the FB Graph
+# API; for security reasons keep this app in a separate file on your local filesystem
 with open("/var/www/flask-test/fbtoken.txt", "r") as f:
     FB_TOKEN = f.readline()
 
 random_phrases = ["cats are cool", "dogs are cool too", "hamsters are fun", "gerbils are fun too"]
 
-userid_to_chat = collections.defaultdict(list)
 
 class MessengerDB(object):
-    """ Initialize a database to keep track of conversations with 
+    """ A database to keep track of conversations with 
     FB dialogue agent """
     def __init__(self, path_to_db):
         self.conn = sqlite3.connect(path_to_db, check_same_thread=False)
@@ -55,51 +58,55 @@ class MessengerDB(object):
 
 
 db = MessengerDB("/var/www/flask-test/chatbot.db")
- 
+
+# This is the first response your server must give FB to verify that your
+# app has a valid callback URL  
 #@app.route('/', methods=['GET', 'POST'])
 def hub_tok_response():
+    # Simply receive FBs GET request and return the "hub.challenge" token n the request
     req_data = request.data
     req_args = request.args
     return req_args['hub.challenge']
 
 
+# This is the server's main entrypoint for receiving messages and send back responses
+# It should be easy to plug and play new system agent models into here
 @app.route('/', methods=["POST"])
 def chatbot_response():
-    global userid_to_chat
     global db
     curr_time = str(datetime.now())
 
     phrase = random.choice(random_phrases)    
+    # Process FBs POST request, containing the user's text to the app
     req_data = request.data
     data = json.loads(req_data)
-    req_args = request.args
+    # Will need sender_id to help FB Graph API redirect system responses to appropriate user
     sender_id = data["entry"][0]["messaging"][0]["sender"]["id"]
     sent_message = data["entry"][0]["messaging"][0]["message"]["text"]
-    print "Sent message: ", sent_message
+
     db.log_response("user", sender_id, curr_time, sent_message)
+
+    # JSON containing system response
     send_back_to_fb = {
  	    "recipient": {"id": sender_id}, "message": { "text": phrase}
     }
     print "Send back to fb: ", send_back_to_fb
-    #userid_to_chat[sender_id].append(sent_message) 
     params_input = {"access_token": FB_TOKEN}
  
-  
+    # Send a POST request to FB, indicating that you wish to send a response
     headers = {'content-type':  'application/json'}
-    # the big change: use another library to send an HTTP request back to FB
     fb_response = requests.post(FB_MESSAGES_ENDPOINT, headers=headers, params=params_input, data=json.dumps(send_back_to_fb)) 
 
     response_time = str(datetime.now())
     db.log_response("sys", sender_id, response_time, phrase)    
-    # handle the response to the subrequest you made
+    # Handle FBs response to the subrequest you made
     if not fb_response.ok:
-        # log some useful info for yourself, for debugging
+        # Log some useful info for yourself, for debugging
         print 'Error in response! %s: %s' % (fb_response.status_code, fb_response.text)
-    # always return 200 to Facebook's original POST request so they know you
+    # Always return 200 to Facebook's original POST request so they know you
     # handled their request
     return "Ok", 200
 
 
 if __name__ == '__main__':
     pass
-    #app.run(host="0.0.0.0")
